@@ -1,28 +1,23 @@
-// server.js
-// Run: npm install express
+const fs = require("fs");
 const express = require("express");
+const { GoogleGenAI } = require("@google/genai");
+
+const apiKey = fs.readFileSync("secrets/gemini_key.txt", "utf8").trim();
+const ai = new GoogleGenAI({apiKey: apiKey});
 const app = express();
 
-app.use(express.static(".")); // serve frontend files from current dir
+app.use(express.json());
+app.use(express.static(".")); // Serve frontend files
 
-const OPENALEX_BASE = "https://api.openalex.org/works";
-
-// Utility: convert OpenAlex abstract_inverted_index to string
-function abstractToString(absIdx) {
-  if (!absIdx) return "";
-  const arr = [];
-  for (const [word, positions] of Object.entries(absIdx)) {
-    positions.forEach(pos => arr[pos] = word);
-  }
-  return arr.join(" ");
-}
+const SEMANTIC_SCHOLAR_BASE = "https://api.semanticscholar.org/graph/v1";
 
 // Scoring heuristic
 function scorePaper(w) {
-  const citations = Math.log10((w.cited_by_count || 0) + 1);
+  MAX_CITATION = 100
+  const citations = Math.log10(Math.min((w.citationCount || 0) + 1, MAX_CITATION));
   const recencyBoost =
-    w.publication_year >= new Date().getFullYear() - 1 ? 1.0 :
-    w.publication_year >= new Date().getFullYear() - 2 ? 0.5 : 0.2;
+    w.year >= new Date().getFullYear() - 1 ? 1.0 :
+    w.year >= new Date().getFullYear() - 2 ? 0.5 : 0.2;
   return 0.3 * citations + 0.2 * recencyBoost;
 }
 
@@ -35,54 +30,53 @@ app.get("/api/search", async (req, res) => {
     }
 
     // 1. Find the main paper
-    const mainResp = await fetch(`${OPENALEX_BASE}?search=${encodeURIComponent(query)}&per-page=1`);
-    const mainData = await mainResp.json();
-
-    if (!mainData.results || mainData.results.length === 0) {
+    const searchResp = await fetch(
+      `${SEMANTIC_SCHOLAR_BASE}/paper/search?query=${encodeURIComponent(query)}&limit=1&fields=title,authors,year,abstract,citationCount,paperId`
+    );
+    const searchData = await searchResp.json();
+    if (!searchData.data || searchData.data.length === 0) {
       return res.json({ seed: null, candidates: [] });
     }
 
-    const seed = mainData.results[0];
-    const seedId = seed.id.split("/").pop(); // e.g., W123456789
+    const seed = searchData.data[0];
+    const seedId = seed.paperId;
 
-    // 2. Get IDs of referenced works (in seed object) and citing works
-    const refIds = (seed.referenced_works || []).map(id => id.split("/").pop());
+    // 2. Get references (cited by seed) and citations (citing seed)
+    const [refsResp, citingResp] = await Promise.all([
+      fetch(`${SEMANTIC_SCHOLAR_BASE}/paper/${seedId}/references?fields=paperId,title,authors,year,abstract,citationCount`),
+      fetch(`${SEMANTIC_SCHOLAR_BASE}/paper/${seedId}/citations?fields=paperId,title,authors,year,abstract,citationCount&limit=15`)
+    ]);
 
-    // Get citing works via API filter
-    const citingResp = await fetch(`${OPENALEX_BASE}?filter=cites:${seedId}&per-page=15`);
+    const refsData = await refsResp.json();
     const citingData = await citingResp.json();
-    const citingIds = (citingData.results || []).map(w => w.id.split("/").pop());
 
-    // 3. Batch fetch metadata for referenced works (if any)
-    let refs = [];
-    if (refIds.length > 0) {
-      const refsResp = await fetch(`${OPENALEX_BASE}?filter=openalex_id:${refIds.slice(0,15).join("|")}`);
-      const refsData = await refsResp.json();
-      refs = refsData.results || [];
-    }
+    // Extract referenced papers (flatten and filter nulls)
+    const refs = (refsData.data || [])
+      .map(ref => ref.citedPaper)
+      .filter(Boolean);
 
-    // Citing works are already full objects
-    let works = [...refs, ...(citingData.results || [])];
+    // Citing papers are already in the response
+    let works = [...refs, ...(citingData.data || [])];
 
-    // 4. Remove duplicates by ID
+    // 3. Remove duplicates by paperId
     const seen = new Set();
     works = works.filter(w => {
-      if (seen.has(w.id)) return false;
-      seen.add(w.id);
+      if (!w.paperId || seen.has(w.paperId)) return false;
+      seen.add(w.paperId);
       return true;
     });
 
-    // 5. Filter for quality
+    // 4. Filter for quality (abstract + citations)
     works = works.filter(w => {
-      const hasAbstract = w.abstract_inverted_index && Object.keys(w.abstract_inverted_index).length > 0;
-      const citationCount = w.cited_by_count || 0;
+      const hasAbstract = w.abstract && w.abstract.length > 0;
+      const citationCount = w.citationCount || 0;
       return hasAbstract && citationCount >= 5;
     });
 
-    // Keep recent or highly cited
+    // 5. Keep recent or highly cited
     works = works.filter(w => {
-      const year = w.publication_year || 0;
-      const citationCount = w.cited_by_count || 0;
+      const year = w.year || 0;
+      const citationCount = w.citationCount || 0;
       return (year >= new Date().getFullYear() - 5) || citationCount >= 50;
     });
 
@@ -90,26 +84,50 @@ app.get("/api/search", async (req, res) => {
     works.sort((a, b) => scorePaper(b) - scorePaper(a));
     works = works.slice(0, 40);
 
-    // 7. Convert to clean objects
+    // 7. Format response
     const seedObj = {
       title: seed.title,
-      authors: (seed.authorships || []).map(a => a.author.display_name).join(", "),
-      year: seed.publication_year,
-      abstract: abstractToString(seed.abstract_inverted_index),
-      citations: seed.cited_by_count
+      authors: (seed.authors || []).map(a => a.name).join(", "),
+      year: seed.year,
+      abstract: seed.abstract || "",
+      citations: seed.citationCount
     };
 
     const candidates = works.map(w => ({
       title: w.title,
-      authors: (w.authorships || []).map(a => a.author.display_name).join(", "),
-      year: w.publication_year,
-      abstract: abstractToString(w.abstract_inverted_index),
-      citations: w.cited_by_count
+      authors: (w.authors || []).map(a => a.name).join(", "),
+      year: w.year,
+      abstract: w.abstract || "",
+      citations: w.citationCount
     }));
 
     res.json({ seed: seedObj, candidates });
   } catch (err) {
     console.error("Error in /api/search:", err);
+    res.status(500).json({ error: "Internal server error" });
+  }
+});
+
+// Chat
+async function generateResponse(message) {
+  const response = await ai.models.generateContent({
+    model: "gemini-2.5-flash",
+    contents: message,
+  });
+  return response.text;
+}
+
+app.post("/api/chat", async (req, res) => {
+  try {
+    const { message } = req.body;
+    if (!message) {
+      return res.status(400).json({ error: "Missing 'message' in request body." });
+    }
+
+    const reply = await generateResponse(message);
+    res.json({ reply });
+  } catch (err) {
+    console.error("Error in /api/chat:", err);
     res.status(500).json({ error: "Internal server error" });
   }
 });

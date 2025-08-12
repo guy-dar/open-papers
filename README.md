@@ -3,6 +3,7 @@ Setup:
 
 ```
 npm install express
+npm install @google/genai
 ```
 
 Run server:
