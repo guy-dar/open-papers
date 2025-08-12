@@ -55,13 +55,36 @@ async function sendMessage() {
     // Show typing indicator
     const typingId = showTyping();
 
+    // Build the full contextual message
+    let fullMessage = "\n\n=== PAPERS CONTEXT ===\n";
+    
+    if (seed) {
+        fullMessage += `SEED PAPER: "${seed.title}" (${seed.year})\n` +
+                      `Abstract: ${seed.abstract}\n\n`;
+    }
+    
+    if (candidates.length > 0) {
+        fullMessage += `RELATED PAPERS (${candidates.length}):\n`;
+        candidates.forEach((paper, index) => {
+            fullMessage += `${index + 1}. "${paper.title}" (${paper.year})\n` +
+                           `Abstract: ${paper.abstract}\n\n`;
+        });
+    }
+    
+    if (selectedPaper) {
+        const isSeed = selectedPaper === seed;
+        fullMessage += `CURRENTLY VIEWING: "${selectedPaper.title}" ` +
+                       `${isSeed ? '(SEED PAPER)' : ''}\n`;
+    }
+    fullMessage += "\n" + message;
+
     // Generate contextual response
     const response = await fetch('/api/chat', {
         method: 'POST',
         headers: {
             'Content-Type': 'application/json'
         },
-        body: JSON.stringify({ message })
+        body: JSON.stringify({ message: fullMessage })
     });
     const data = await response.json();
     let responseText = data.reply;

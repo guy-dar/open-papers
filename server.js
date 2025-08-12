@@ -111,7 +111,7 @@ app.get("/api/search", async (req, res) => {
 // Chat
 async function generateResponse(message) {
   const response = await ai.models.generateContent({
-    model: "gemini-2.5-flash",
+    model: "gemini-2.5-flash-lite",
     contents: message,
   });
   return response.text;
