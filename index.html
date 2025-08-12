@@ -1,0 +1,122 @@
+<html>
+<head>
+  <meta charset="UTF-8">
+  <title>Open Papers</title>
+  <style>
+    body { font-family: Arial, sans-serif; margin: 0; padding: 0; }
+    #controls { padding: 10px; background: #f0f0f0; }
+    #results { display: flex; }
+    #list { flex: 1; border-right: 1px solid #ccc; padding: 10px; overflow-y: auto; max-height: calc(100vh - 50px); }
+    #abstract { flex: 1; padding: 10px; overflow-y: auto; max-height: calc(100vh - 50px); }
+    #cy { flex: 1; height: calc(100vh - 50px); }
+    .paper { padding: 5px; cursor: pointer; }
+    .paper:hover { background: #eef; }
+  </style>
+</head>
+<body>
+<div id="controls">
+  <input id="query" placeholder="Enter title, DOI, or keywords" size="50">
+  <button id="searchBtn">Search</button>
+  <button id="toggleView">Toggle Graph/List</button>
+</div>
+<div id="results">
+  <div id="list"></div>
+  <div id="abstract"></div>
+</div>
+<div id="cy" style="display:none;"></div>
+
+<script src="https://unpkg.com/cytoscape/dist/cytoscape.min.js"></script>
+<script>
+let seed = null;
+let candidates = [];
+let currentView = "list";
+
+function renderList() {
+  document.getElementById("cy").style.display = "none";
+  document.getElementById("results").style.display = "flex";
+  const listDiv = document.getElementById("list");
+  listDiv.innerHTML = "";
+  candidates.forEach((p, idx) => {
+    const div = document.createElement("div");
+    div.className = "paper";
+    div.textContent = `${p.title} (${p.year})`;
+    div.onclick = () => showAbstract(p);
+    listDiv.appendChild(div);
+  });
+}
+
+function showAbstract(paper) {
+  const absDiv = document.getElementById("abstract");
+  absDiv.innerHTML = `<h3>${paper.title}</h3><p><b>Authors:</b> ${paper.authors}</p><p><b>Year:</b> ${paper.year}</p><p><b>Citations:</b> ${paper.citations}</p><p>${paper.abstract}</p>`;
+}
+
+function renderGraph() {
+  document.getElementById("results").style.display = "none";
+  document.getElementById("cy").style.display = "block";
+
+  const tokenize = txt => new Set(txt.toLowerCase().replace(/[^a-z0-9\s]/g, " ").split(/\s+/).filter(Boolean));
+  const jaccard = (a, b) => {
+    const A = tokenize(a), B = tokenize(b);
+    if (!A.size || !B.size) return 0;
+    let inter = 0; for (const t of A) if (B.has(t)) inter++;
+    return inter / new Set([...A, ...B]).size;
+  };
+
+  const elements = [
+    { data: { id: "seed", label: seed.title } },
+    ...candidates.map((c, i) => ({ data: { id: `c${i}`, label: c.title } })),
+    ...candidates.map((_, i) => ({ data: { source: "seed", target: `c${i}` } })),
+  ];
+
+  const threshold = 0.15;
+  for (let i = 0; i < candidates.length; i++) {
+    const ciText = `${candidates[i].title} ${candidates[i].abstract}`;
+    for (let j = i + 1; j < candidates.length; j++) {
+      const cjText = `${candidates[j].title} ${candidates[j].abstract}`;
+      if (jaccard(ciText, cjText) >= threshold) {
+        elements.push({ data: { source: `c${i}`, target: `c${j}` } });
+      }
+    }
+  }
+
+  const cy = cytoscape({
+    container: document.getElementById("cy"),
+    elements,
+    style: [
+      { selector: "node", style: { label: "data(label)", "text-valign": "center", "font-size": 10, "background-color": "#0074D9", color: "#fff" } },
+      { selector: "edge", style: { width: 1, "line-color": "#ccc" } }
+    ],
+    layout: { name: "cose" }
+  });
+
+  cy.on("tap", "node", evt => {
+    const id = evt.target.id();
+    if (id === "seed") {
+      showAbstract(seed);
+    } else {
+      const idx = parseInt(id.slice(1));
+      showAbstract(candidates[idx]);
+    }
+  });
+}
+
+document.getElementById("searchBtn").onclick = async () => {
+  const q = document.getElementById("query").value.trim();
+  if (!q) return;
+  const resp = await fetch(`/api/search?q=${encodeURIComponent(q)}`);
+  const data = await resp.json();
+  seed = data.seed;
+  candidates = data.candidates;
+  renderList();
+  showAbstract(seed);
+};
+
+document.getElementById("toggleView").onclick = () => {
+  if (!seed) return;
+  currentView = currentView === "list" ? "graph" : "list";
+  if (currentView === "graph") renderGraph();
+  else renderList();
+};
+</script>
+</body>
+</html>
