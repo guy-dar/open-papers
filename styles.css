@@ -368,6 +368,7 @@
 
     .chat-messages {
       flex: 1;
+      max-height: 400px;
       padding: 16px;
       overflow-y: auto;
       background: #f8fafc;
