@@ -340,6 +340,7 @@ function renderGraph() {
 }
 
 document.getElementById("searchBtn").onclick = async () => {
+    hideSuggestions(); 
     const q = document.getElementById("query").value.trim();
     if (!q) return;
     
@@ -433,3 +434,117 @@ function loadDemoData() {
     showAbstract(seed);
     selectedPaper = seed;
 }
+
+// Autocompletion
+const SEMANTIC_SCHOLAR_AUTOCOMPLETE = "https://api.semanticscholar.org/graph/v1/paper/autocomplete";
+const MIN_CHARS_FOR_AUTOCOMPLETE = 3;
+const DEBOUNCE_DELAY = 300;
+
+const suggestionsDropdown = document.getElementById("suggestionsDropdown");
+const searchInput = document.getElementById("query");
+
+// Debounce function
+function debounce(fn, delay) {
+  let timeout;
+  return function(...args) {
+    clearTimeout(timeout);
+    timeout = setTimeout(() => fn.apply(this, args), delay);
+  };
+}
+
+// Show suggestions dropdown
+function showSuggestions(suggestions) {
+  if (!suggestions || suggestions.length === 0) {
+    suggestionsDropdown.style.display = 'none';
+    return;
+  }
+
+  suggestionsDropdown.innerHTML = suggestions.map(suggestion => `
+    <div class="suggestion-item" data-paper-id="${suggestion.paperId}">
+      <div class="suggestion-title">${suggestion.title}</div>
+      <div class="suggestion-meta">
+        <span class="suggestion-authors-year">${suggestion.authorsYear || 'Unknown authors'}</span>
+      </div>
+    </div>
+  `).join('');
+
+  suggestionsDropdown.style.display = 'block';
+}
+
+// Hide suggestions dropdown
+function hideSuggestions() {
+  suggestionsDropdown.style.display = 'none';
+}
+
+// Fetch autocomplete suggestions
+async function fetchSuggestions(query) {
+  try {
+    const response = await fetch(`${SEMANTIC_SCHOLAR_AUTOCOMPLETE}?query=${encodeURIComponent(query)}`);
+    const data = await response.json();
+    return data.matches || [];
+  } catch (error) {
+    console.error("Autocomplete error:", error);
+    return [];
+  }
+}
+
+// Handle input events with debouncing
+searchInput.addEventListener('input', debounce(async (e) => {
+  const query = e.target.value.trim();
+  
+  if (query.length < MIN_CHARS_FOR_AUTOCOMPLETE) {
+    hideSuggestions();
+    return;
+  }
+
+  const suggestions = await fetchSuggestions(query);
+  showSuggestions(suggestions);
+}, DEBOUNCE_DELAY));
+
+// Handle suggestion selection
+suggestionsDropdown.addEventListener('click', (e) => {
+  const suggestionItem = e.target.closest('.suggestion-item');
+  if (suggestionItem) {
+    searchInput.value = suggestionItem.querySelector('.suggestion-title').textContent;
+    hideSuggestions();
+    document.getElementById("searchBtn").click(); // Trigger search immediately
+  }
+});
+
+// Close dropdown when clicking outside
+document.addEventListener('click', (e) => {
+  if (!searchInput.contains(e.target) && !suggestionsDropdown.contains(e.target)) {
+    hideSuggestions();
+  }
+});
+
+// Keyboard navigation for suggestions
+searchInput.addEventListener('keydown', (e) => {
+  if (suggestionsDropdown.style.display !== 'block') return;
+
+  const items = suggestionsDropdown.querySelectorAll('.suggestion-item');
+  if (!items.length) return;
+
+  let currentIndex = -1;
+  items.forEach((item, index) => {
+    if (item.classList.contains('highlighted')) {
+      currentIndex = index;
+      item.classList.remove('highlighted');
+    }
+  });
+
+  if (e.key === 'ArrowDown') {
+    e.preventDefault();
+    const nextIndex = currentIndex < items.length - 1 ? currentIndex + 1 : 0;
+    items[nextIndex].classList.add('highlighted');
+    items[nextIndex].scrollIntoView({ block: 'nearest' });
+  } else if (e.key === 'ArrowUp') {
+    e.preventDefault();
+    const prevIndex = currentIndex > 0 ? currentIndex - 1 : items.length - 1;
+    items[prevIndex].classList.add('highlighted');
+    items[prevIndex].scrollIntoView({ block: 'nearest' });
+  } else if (e.key === 'Enter' && currentIndex >= 0) {
+    e.preventDefault();
+    items[currentIndex].click();
+  }
+});

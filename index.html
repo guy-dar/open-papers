@@ -13,7 +13,8 @@
         <div class="logo">📚 Open Papers</div>
         <div class="search-container">
           <div class="search-box">
-            <input id="query" placeholder="Enter title, DOI, or keywords to discover research papers" type="text">
+            <input autocomplete="off" id="query" placeholder="Enter title, DOI, or keywords to discover research papers" type="text">
+            <div id="suggestionsDropdown" class="suggestions-dropdown"></div>
             <button id="searchBtn">
               <span>Search</span>
             </button>
@@ -59,6 +60,9 @@
       <div class="chat-messages" id="chatMessages">
         <div class="message bot">
           Hi! I'm your research assistant. I can help you understand papers, suggest related research, or answer questions about your search results. How can I help you today?
+        </div>
+        <div class="chat-messages-container">
+          <div class="chat-messages" id="chatMessages"></div>
         </div>
       </div>
       <div class="chat-input-container">
